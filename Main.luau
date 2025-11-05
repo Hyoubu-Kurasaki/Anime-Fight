@@ -183,7 +183,7 @@ MainTab:CreateToggle({
 
 MainTab:CreateSlider({
     Name = "⚙️ FPS Alvo",
-    Range = {1, 60},
+    Range = {1, 1000},
     Increment = 1,
     Suffix = " FPS",
     CurrentValue = TargetFPS,
