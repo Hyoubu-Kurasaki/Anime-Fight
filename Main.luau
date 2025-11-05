@@ -24,6 +24,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
 local Bridge = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Bridge")
 
 -- // Variables
@@ -114,6 +115,15 @@ MainTab:CreateToggle({
     Callback = function(Value)
         StarFarmEnabled = Value
         if Value then StartStarFarm() end
+    end,
+})
+
+MainTab:CreateToggle({
+    Name = "⚠️ Disable UI",
+    CurrentValue = false,
+    Flag = "UI",
+    Callback = function(Value)
+        PlayerGui.Rewards.Frame.List.Frame.Visible = not Value
     end,
 })
 
