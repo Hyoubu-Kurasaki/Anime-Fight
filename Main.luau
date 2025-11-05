@@ -117,18 +117,6 @@ MainTab:CreateToggle({
     end,
 })
 
-MainTab:CreateToggle({
-    Name = "🖱️ Auto Click",
-    CurrentValue = false,
-    Flag = "AutoClick",
-    Callback = function(Value)
-        AutoClickEnabled = Value
-        if Value then
-            StartAutoClick()
-        end
-    end,
-})
-
 MainTab:CreateInput({
     Name = "🕐 Atraso do Clique (segundos)",
     CurrentValue = tostring(ClickDelay),
@@ -152,7 +140,7 @@ MainTab:CreateInput({
 
 MainTab:CreateInput({
     Name = "⌨️ Tecla pra ativar clique",
-    PlaceholderText = "Ex: Z",
+    PlaceholderText = "Z",
     RemoveTextAfterFocusLost = false,
     Flag = "ClickKeyInput",
     Callback = function(Text)
