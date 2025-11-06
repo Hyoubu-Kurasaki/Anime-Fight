@@ -42,6 +42,11 @@ local TowerWave = 0
 local AutoTpEnabled = false
 local Part = nil
 local Gamemode = false
+local AutoCollectMeteor = false
+local State = {
+    Trial = false,
+    Tower = false
+}
 
 local FPSConnection = nil
 local AFKConnection
@@ -116,6 +121,9 @@ end
 
 local function StartTrial()
     task.spawn(function()
+        local targetLobby = CFrame.new(
+            -2545.59814, -262.194031, 1653.35571, -0.0989561975, -3.3608444e-08, 0.995091796, 1.30098812e-08, 1, 3.50679734e-08, -0.995091796, 1.64162195e-08, -0.0989561975
+        )
         local targetCFrame = CFrame.new(
             -2649.79639, -260.956909, 1655.41675,
             -0.81860286, 6.67227482e-08, 0.574359953,
@@ -130,42 +138,47 @@ local function StartTrial()
             Image = 4483362458
         })
 
-        while TrialEnabled do
-            local Gamemodes = ReplicatedStorage:FindFirstChild("Gamemodes")
-            if Gamemodes then
-                local TrialFolder = Gamemodes:FindFirstChild("Trial")
-                if TrialFolder then
-                    local Opened = TrialFolder:FindFirstChild("Open")
-                    local Wave = TrialFolder:FindFirstChild("Wave")
+        task.spawn(function()
+            while TrialEnabled do
+                task.spawn()
+                local Root = Player.Character.HumanoidRootPart
+                local Trial = ReplicatedStorage.Gamemodes.Trial
 
-                    if Opened and Wave then
-                        if Wave.Value >= (TrialWave == 0 and math.huge or TrialWave) then
-                            Bridge:FireServer("Gamemodes", "Trial", "Leave")
-                            Gamemode = false
-                            return
-                        end
+                -- Stating
+                if Trial.Open.Value and not State.Trial then
+                    State.Trial = true
+                    Root.CFrame = targetLobby
 
-                        local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-                        if Root and Opened.Value then
-                            pcall(function()
-                                Root.CFrame = targetCFrame
-                            end)
-                        end
+                    task.wait(2.5)
+                    Bridge:FireServer("Gamemodes", "Trial", "Join")
+                    State.Trial_State = "Joined"
+                    Gamemode = true
+                end
 
-                        if Opened.Value and Root then
-                            Bridge:FireServer("Gamemodes", "Trial", "Enter")
-                            Gamemode = true
-                        end
+                if State.Trial then
+                    if State.Trial_State == "Joined" then
+                        task.wait(1)
+                        Root.CFrame = targetCFrame
+                    end
+
+                    if Trial.Wave.Value >= (TrialWave <= 0 and math.huge or TrialWave) then
+                        Bridge:FireServer("Gamemodes", "Trial", "Leave")
+                        State.Trial = false
+                        State.Trial_State = nil
+                        Gamemode = false
                     end
                 end
             end
-            task.wait(0.5)
-        end
+        end)
     end)
 end
 
 local function StartTower()
     task.spawn(function()
+        local targetLobby = CFrame.new(
+            -1568.71289, 53.5078697, 1560.44226, -0.893741369, -2.02394439e-08, 0.448582649, -2.50651699e-09, 1, 4.01247497e-08, -0.448582649, 3.47367681e-08, -0.893741369
+        )
+
         local targetCFrame = CFrame.new(
             -2509.34204, -347.733246, 2646.52539,
             -0.907230675, 2.57756465e-08, -0.420633405,
@@ -180,36 +193,51 @@ local function StartTower()
             Image = 4483362458
         })
 
+        local TowerFolder = ReplicatedStorage.Gamemodes.Tower
+        local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+        
+        if not Root then return end
+
         while TowerEnabled do
-            local Gamemodes = ReplicatedStorage:FindFirstChild("Gamemodes")
-            if Gamemodes then
-                local TowerFolder = Gamemodes:FindFirstChild("Tower")
-                if TowerFolder then
-                    local Opened = TowerFolder:FindFirstChild("Open")
-                    local Wave = TowerFolder:FindFirstChild("Wave")
+            local Opened = TowerFolder:FindFirstChild("Open")
+            local Wave = TowerFolder:FindFirstChild("Wave")
+            
+            if not Opened or not Wave then task.wait(0.5) continue end
+            
+            if Opened.Value and not State.Tower then
+                State.Tower = true
+                State.Tower_State = "Teleporting"
+                Gamemode = true
+                
+                Root.CFrame = targetLobby
 
-                    if Opened and Wave then
-                        if Wave.Value >= (TowerWave == 0 and math.huge or TowerWave) then
-                            Bridge:FireServer("Gamemodes", "Tower", "Leave")
-                            Gamemode = false
-                            return
-                        end
+                task.wait(2.5)
+                
+                Bridge:FireServer("Gamemodes", "Tower", "Join")
+                State.Tower_State = "Joined"
+            end
 
-                        local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-                        if Root and Opened.Value then
-                            pcall(function()
-                                Root.CFrame = targetCFrame
-                            end)
-                        end
+            if State.Tower then
+                if State.Tower_State == "Joined" then
+                    Root.CFrame = targetCFrame
+                    State.Tower_State = "InGame"
+                end
 
-                        if Opened.Value and Root then
-                            Bridge:FireServer("Gamemodes", "Tower", "Enter")
-                            Gamemode = true
-                        end
-                    end
+                local maxWave = TowerWave <= 0 and math.huge or TowerWave
+                if Wave.Value >= maxWave then
+                    State.Tower_State = "Leaving"
+                end
+
+                if State.Tower_State == "Leaving" then
+                    Bridge:FireServer("Gamemodes", "Tower", "Leave")
+                    
+                    State.Tower = false
+                    State.Tower_State = nil
+                    Gamemode = false
                 end
             end
-            task.wait(0.5)
+            
+            task.wait()
         end
     end)
 end
@@ -235,6 +263,56 @@ local function StartAutoTP()
                 end
             end
             task.wait(1.5)
+        end
+    end)
+end
+
+local function StartAutoMeteor()
+    task.spawn(function()
+        Rayfield:Notify({
+            Title = "🌠 Auto Meteor",
+            Content = "Auto Collect iniciado.",
+            Duration = 3,
+            Image = 4483362458
+        })
+
+        local Collected = {}
+
+        while AutoCollectMeteor do
+            for _, Meteor in pairs(workspace.Server.GameEvent.Meteors.Spawned:GetChildren()) do
+                if Meteor:IsA("Model") and Meteor:FindFirstChild("Mesh") then
+                    local Prompt = Meteor.Mesh:FindFirstChildOfClass("ProximityPrompt")
+                    if Prompt and not Collected[Meteor] then
+                        Prompt.HoldDuration = 0
+                        Prompt.RequiresLineOfSight = false
+                        Prompt.MaxActivationDistance = 30
+
+                        local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+                        if Root then
+                            local dist = (Root.Position - Meteor.Mesh.Position).Magnitude
+                            if dist > 25 then
+                                local oldCFrame = Root.CFrame
+                                Root.CFrame = Meteor.Mesh.CFrame + vector.create(0, 3, 0)
+
+                                pcall(function()
+                                    fireproximityprompt(Prompt, 0)
+                                end)
+
+                                task.wait()
+                                Root.CFrame = oldCFrame
+                            else
+                                pcall(function()
+                                    fireproximityprompt(Prompt, 0)
+                                end)
+                            end
+
+                            Collected[Meteor] = true
+                        end
+                    end
+                end
+            end
+
+            task.wait(0.5)
         end
     end)
 end
@@ -416,6 +494,17 @@ Autos:CreateToggle({
         if Value then
             StartAutoTP()
         end
+    end,
+})
+
+local Events = Window:CreateTab("Events", 6022668969)
+Events:CreateToggle({
+    Name = "🌠 Auto Collect Meteor",
+    CurrentValue = false,
+    Flag = "Auto_TP",
+    Callback = function(Value)
+        AutoCollectMeteor = Value
+        
     end,
 })
 
