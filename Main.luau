@@ -61,7 +61,7 @@ local function StartStarFarm()
 			pcall(function()
 				Bridge:FireServer("General", "Star", "Open")
 			end)
-			task.wait(0.25)
+			task.wait()
 		end
 	end)
 end
