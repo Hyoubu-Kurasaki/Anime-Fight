@@ -43,6 +43,7 @@ local AutoTpEnabled = false
 local Part = nil
 local Gamemode = false
 local AutoCollectMeteor = false
+local AutoAttackEnabled = false
 local State = {
 	Trial = false,
 	Tower = false,
@@ -187,6 +188,7 @@ local function StartTrial()
 
 				task.wait(2.5)
 
+				Bridge:FireServer("Gamemodes", "Trial", "Start")
 				Bridge:FireServer("Gamemodes", "Trial", "Join")
 				State.Trial_State = "Joined"
 			end
@@ -215,6 +217,14 @@ local function StartTrial()
 			end
 
 			task.wait()
+		end
+	end)
+end
+
+local function AutoAttack()
+	task.spawn(function()
+		while AutoAttackEnabled do
+			Bridge:FireServer("General" )
 		end
 	end)
 end
@@ -282,6 +292,7 @@ local function StartTower()
 
 				task.wait(2.5)
 
+				Bridge:FireServer("Gamemodes", "Tower", "Start")
 				Bridge:FireServer("Gamemodes", "Tower", "Join")
 				State.Tower_State = "Joined"
 			end
