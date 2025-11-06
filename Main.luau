@@ -20,6 +20,7 @@ local Window = Rayfield:CreateWindow({
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
@@ -33,7 +34,10 @@ local AutoClickEnabled = false
 local ClickDelay = 0.05
 local TargetFPS = 30
 local FPSEnabled = false
+local AFKEnabled = false
+
 local FPSConnection = nil
+local AFKConnection
 
 local ClickYOffset = 400
 local AutoClickKey = Enum.KeyCode.Z 
@@ -47,6 +51,22 @@ local function StartStarFarm()
         end
     end)
 end
+
+local function StartAFK()
+    if AFKConnection then
+        AFKConnection:Disconnect()
+        AFKConnection = nil
+    end
+
+    if not AFKEnabled then return end
+
+    AFKConnection = game:GetService("Players").LocalPlayer.Idled:Connect(function()
+        VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        task.wait(1)
+        VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    end)
+end
+
 
 local function StartAutoClick()
     task.spawn(function()
@@ -191,6 +211,47 @@ MainTab:CreateSlider({
     Callback = function(Value)
         TargetFPS = math.floor(Value)
         if FPSEnabled then FPS() end
+    end,
+})
+
+local Autos = Window:CreateTab("Autos", 6022668969)
+Autos:CreateToggle({
+    Name = "🚀 Auto Trial",
+    CurrentValue = false,
+    Flag = "AutoTrial",
+    Callback = function(Value)
+        
+    end,
+})
+
+MainTab:CreateSlider({
+    Name = "🚀 Sair em qual wave",
+    Range = {1, 1000000},
+    Increment = 1,
+    Suffix = "Wave",
+    CurrentValue = 0,
+    Flag = "WaveTrial",
+    Callback = function(Value)
+        TargetFPS = math.floor(Value)
+        if FPSEnabled then FPS() end
+    end,
+})
+
+local Config = Window:CreateTab("Settings", 6022668969)
+Config:CreateToggle({
+    Name = "😴 Auto-AFK",
+    CurrentValue = false,
+    Flag = "AFK",
+    Callback = function(Value)
+        AFKEnabled = Value
+        StartAFK()
+
+        Rayfield:Notify({
+            Title = "Hyoubu Hub",
+            Content = Value and "Modo AFK ativado — você não será kickado!" or "Modo AFK desativado.",
+            Duration = 3,
+            Image = 4483362458
+        })
     end,
 })
 
