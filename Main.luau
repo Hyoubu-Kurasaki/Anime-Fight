@@ -1,14 +1,16 @@
+-- // Inicializing
+local StartTime = tick()
+
 -- // Load Rayfield
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
 -- // Create Window
 local Window = Rayfield:CreateWindow({
-	Name = "⭐ Hyoubu Hub",
-	LoadingTitle = "Hyoubu Hub",
-	LoadingSubtitle = "eu odeio o z1nz",
-	Theme = "Default",
-	ToggleUIKeybind = "K",
-
+	Name = "🌙 Eclipse Hub",
+	LoadingTitle = "Eclipse Hub",
+	LoadingSubtitle = "by Eclipse Team",
+	Theme = "Serenity",
+	ToggleUIKeybind = Enum.KeyCode.K,
 	ConfigurationSaving = {
 		Enabled = true,
 		FolderName = "HyoubuHub",
@@ -23,601 +25,742 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-
+local HttpService = game:GetService("HttpService") -- for webhook preview (if needed)
 local Player = Players.LocalPlayer
-local PlayerGui = Player:WaitForChild("PlayerGui")
+local _PlayerGui = Player:WaitForChild("PlayerGui")
 local Bridge = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Bridge")
 
--- // Variables
-local StarFarmEnabled = false
-local AutoClickEnabled = false
+-- // Core Variables
 local ClickDelay = 0.05
 local TargetFPS = 30
-local FPSEnabled = false
-local AFKEnabled = false
-local TrialEnabled = false
-local TrialWave = 0
-local TowerEnabled = false
-local TowerWave = 0
-local AutoTpEnabled = false
-local Part = nil
+local AutoClickKey = Enum.KeyCode.Z
+local ClickYOffset = 400
+local Star_World = {}
+local Trait = {}
+local Stats = { Attack = {}, Speed = {}, Ultimate = {} }
+
+-- Control flags / states
 local Gamemode = false
-local AutoCollectMeteor = false
-local AutoAttackEnabled = false
-local State = {
-	Trial = false,
-	Tower = false,
+local AllowTeleport = true
+local State = { Trial = false, Tower = false }
+
+local function RGB(r, g, b)
+	return string.format("@@%02x%02x%02x", r, g, b)
+end
+
+local Logger = {}
+
+Logger.Prefix = "[🌙 Eclipse Hub]"
+Logger.Colors = {
+	Prefix = RGB(155, 120, 255),
+	Info = RGB(180, 180, 180),
+	Warn = RGB(255, 215, 100),
+	Error = RGB(255, 80, 80),
+	Success = RGB(120, 255, 120),
+	Reset = "@@ffffff",
 }
 
-local FPSConnection = nil
-local AFKConnection
-local ClickYOffset = 400
-local AutoClickKey = Enum.KeyCode.Z
+-- =========================
+-- Loader / Debug
+-- =========================
 
--- // Private Functions
-local function StartStarFarm()
-	task.spawn(function()
-		while StarFarmEnabled do
-			pcall(function()
-				Bridge:FireServer("General", "Star", "Open")
-			end)
-			task.wait()
-		end
-	end)
+local function printColored(color, text)
+	print(text)
 end
 
-local function StartAFK()
-	if AFKConnection then
-		AFKConnection:Disconnect()
-		AFKConnection = nil
-	end
+function Logger:Info(text)
+	printColored(self.Colors.Info, string.format("%s [INFO] %s", self.Prefix, text))
+end
 
-	if not AFKEnabled then
+function Logger:Success(text)
+	printColored(self.Colors.Success, string.format("%s [OK] %s", self.Prefix, text))
+end
+
+function Logger:Warn(text)
+	printColored(self.Colors.Warn, string.format("%s [WARN] %s", self.Prefix, text))
+end
+
+function Logger:Error(text)
+	printColored(self.Colors.Error, string.format("%s [ERROR] %s", self.Prefix, text))
+end
+
+function Logger:InitDone()
+	local elapsed = tick() - StartTime
+	local text = string.format("%s Initialized in %.3fs", self.Prefix, elapsed)
+	printColored(self.Colors.Success, text)
+end
+
+_G.Logger = Logger
+
+-- =========================
+-- Teleport Queue / Priority
+-- =========================
+local TeleportQueue = {
+	Queue = {},
+	IsTeleporting = false,
+	LastTeleportAt = 0,
+	Cooldown = 0.35,
+}
+
+local PRIORITIES = {
+	Event = 1, -- e.g. Meteor/Star
+	Gamemode = 2, -- Trial/Tower
+	Misc = 3, -- other teleports
+}
+
+function TeleportQueue:Add(cf, tag, callback)
+	local priority = PRIORITIES[tag] or PRIORITIES.Misc
+	if self.Queue[cf] then
 		return
 	end
 
-	AFKConnection = Player.Idled:Connect(function()
-		VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-		task.wait(1)
-		VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-	end)
-end
-
-local function StartAutoClick()
-	task.spawn(function()
-		while AutoClickEnabled do
-			local viewport = workspace.CurrentCamera.ViewportSize
-			local x = viewport.X / 2
-			local y = viewport.Y / 2 + ClickYOffset
-
-			VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-			VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-			task.wait(ClickDelay)
+	self.Queue[cf] = { cf = cf, tag = tag or "Misc", priority = priority, callback = callback }
+	table.sort(self.Queue, function(a, b)
+		if a.priority == b.priority then
+			return false
 		end
+		return a.priority < b.priority
 	end)
 end
 
-local function FPS()
+function TeleportQueue:ProcessOnce()
+	if self.IsTeleporting then
+		return
+	end
+	if #self.Queue == 0 then
+		return
+	end
+	if not AllowTeleport then
+		return
+	end
+
+	if Gamemode then
+		local idx = nil
+		for i, job in ipairs(self.Queue) do
+			if job.priority == PRIORITIES.Gamemode then
+				idx = i
+				break
+			end
+		end
+		if not idx then
+			return
+		end
+		local job = table.remove(self.Queue, idx)
+		self:ExecuteJob(job)
+		return
+	end
+
+	local job = table.remove(self.Queue, 1)
+	if job then
+		self:ExecuteJob(job)
+	end
+end
+
+function TeleportQueue:ExecuteJob(job)
+	self.IsTeleporting = true
+	local cf = job.cf
+	local callback = job.callback
+
+	local root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		table.insert(self.Queue, job)
+		self.IsTeleporting = false
+		return
+	end
+
+	root.CFrame = cf
+
+	if callback then
+		pcall(callback)
+	end
+
+	self.LastTeleportAt = os.clock()
+	task.wait(math.max(0.15, self.Cooldown))
+	self.IsTeleporting = false
+end
+
+-- processing loop
+task.spawn(function()
+	while true do
+		pcall(function()
+			TeleportQueue:ProcessOnce()
+		end)
+		task.wait(0.2)
+	end
+end)
+
+local function SafeTeleport(cf, tag, callback)
+	if not cf then
+		return false
+	end
+	TeleportQueue:Add(cf, tag or "Misc", callback)
+	return true
+end
+
+-- =========================
+-- Helpers
+-- =========================
+local function Notify(title, content, duration)
+	Rayfield:Notify({
+		Title = title or "Eclipse Hub",
+		Content = content or "",
+		Duration = duration or 3,
+		Image = "bell-plus",
+	})
+end
+
+-- =========================
+-- Job Manager
+-- =========================
+local JobManager = {}
+JobManager.ActiveJobs = {}
+
+function JobManager:Add(name, startFn, stopFn)
+	self.ActiveJobs[name] = {
+		Enabled = false,
+		Start = startFn,
+		Stop = stopFn,
+		Thread = nil,
+	}
+end
+
+function JobManager:Toggle(name, state)
+	local job = self.ActiveJobs[name]
+	if not job then
+		return
+	end
+
+	job.Enabled = state
+	if state then
+		if job.Thread then
+			task.cancel(job.Thread)
+		end
+		job.Thread = task.spawn(job.Start)
+	else
+		if job.Stop then
+			job.Stop()
+		end
+		if job.Thread then
+			task.cancel(job.Thread)
+		end
+		job.Thread = nil
+	end
+end
+
+function JobManager:IsRunning(name)
+	local job = self.ActiveJobs[name]
+	return job and job.Enabled
+end
+
+-- =========================
+-- Jobs
+-- =========================
+
+-- Auto Star Farm
+JobManager:Add("StarFarm", function()
+	Notify("⭐ Auto Star", "Auto Star iniciado.")
+	while JobManager:IsRunning("StarFarm") do
+		local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+		local Folder = workspace:FindFirstChild("Server")
+		local StarsFolder = Folder and Folder:FindFirstChild("Stars")
+		if not (StarsFolder and Star_World and Root) then
+			continue
+		end
+
+		local Star = StarsFolder:FindFirstChild(Star_World)
+		if Star and Star:FindFirstChild("Model") then
+			local Target = Star.Model:FindFirstChild("Root")
+			if Target then
+				if not workspace.Client.Maps:FindFirstChild(Star_World) then
+					Bridge:FireServer("General", "Teleport", "Teleport", Star_World)
+				end
+
+				print("safafaw")
+				Bridge:FireServer("General", "Star", "Open")
+				SafeTeleport(Target.CFrame, "Misc", function() end)
+			end
+		end
+		task.wait()
+	end
+end, function()
+	Notify("⭐ Auto Star", "Parado.")
+end)
+
+-- Auto Click
+JobManager:Add("AutoClick", function()
+	Notify("🖱️ Auto Click", "Ativado")
+	while JobManager:IsRunning("AutoClick") do
+		local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
+		local x = viewport.X / 2
+		local y = viewport.Y / 2 + ClickYOffset
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+		task.wait(ClickDelay)
+	end
+end, function()
+	Notify("🖱️ Auto Click", "Desativado")
+end)
+
+-- FPS Limit
+local FPSConnection
+JobManager:Add("FPSLimit", function()
+	local TargetFrameTime = 1 / TargetFPS
 	if FPSConnection then
 		FPSConnection:Disconnect()
-		FPSConnection = nil
 	end
-
-	if not FPSEnabled or TargetFPS <= 0 then
-		return
-	end
-	local TargetFrameTime = 1 / TargetFPS
 
 	FPSConnection = RunService.RenderStepped:Connect(function()
 		local t0 = tick()
 		repeat
 		until t0 + TargetFrameTime < tick()
 	end)
-end
-
-local function ToggleFPSLimit(Value)
-	FPSEnabled = Value
-	if Value then
-		FPS()
-	elseif FPSConnection then
+end, function()
+	if FPSConnection then
 		FPSConnection:Disconnect()
 		FPSConnection = nil
 	end
-end
+end)
 
-local function StartTrial()
-	task.spawn(function()
-		local Lobby = CFrame.new(
-			-2545.59814,
-			-262.194031,
-			1653.35571,
-			-0.0989561975,
-			-3.3608444e-08,
-			0.995091796,
-			1.30098812e-08,
-			1,
-			3.50679734e-08,
-			-0.995091796,
-			1.64162195e-08,
-			-0.0989561975
-		)
-
-		local Trial = CFrame.new(
-			-2649.79639,
-			-260.956909,
-			1655.41675,
-			-0.81860286,
-			6.67227482e-08,
-			0.574359953,
-			3.90344326e-08,
-			1,
-			-6.05352923e-08,
-			-0.574359953,
-			-2.71345506e-08,
-			-0.81860286
-		)
-
-		local TrialFolder = ReplicatedStorage.Gamemodes.Trial
-		local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-
-		if not Root then
-			return
-		end
-
-		Rayfield:Notify({
-			Title = "Hyoubu Hub",
-			Content = "Auto Trial iniciado.",
-			Duration = 3,
-			Image = 4483362458,
-		})
-
-		while TrialEnabled do
-			local Opened = TrialFolder:FindFirstChild("Open")
-			local Wave = TrialFolder:FindFirstChild("Wave")
-
-			if not Opened or not Wave then
-				continue
-			end
-
-			if Opened.Value and not State.Trial then
-				State.Trial = true
-				State.Trial_State = "Teleporting"
-				Gamemode = true
-
-				Root.CFrame = Lobby
-
-				task.wait(2.5)
-
-				Bridge:FireServer("Gamemodes", "Trial", "Start")
-				Bridge:FireServer("Gamemodes", "Trial", "Join")
-				State.Trial_State = "Joined"
-			end
-
-			if State.Trial then
-				if State.Trial_State == "Joined" then
-					State.Trial_State = "InGame"
-				end
-
-                if State.Trial_State == "InGame" then
-                    Root.CFrame = Trial
-                end
-
-				local maxWave = TrialWave <= 0 and math.huge or TrialWave
-				if Wave.Value >= maxWave then
-					State.Trial_State = "Leaving"
-				end
-
-				if State.Trial_State == "Leaving" then
-					Bridge:FireServer("Gamemodes", "Trial", "Leave")
-
-					State.Trial = false
-					State.Trial_State = nil
-					Gamemode = false
-				end
-			end
-
-			task.wait()
-		end
-	end)
-end
-
-local function AutoAttack()
-	task.spawn(function()
-		while AutoAttackEnabled do
-			Bridge:FireServer("General" )
-		end
-	end)
-end
-
-local function StartTower()
-	task.spawn(function()
-		local targetLobby = CFrame.new(
-			-1568.71289,
-			53.5078697,
-			1560.44226,
-			-0.893741369,
-			-2.02394439e-08,
-			0.448582649,
-			-2.50651699e-09,
-			1,
-			4.01247497e-08,
-			-0.448582649,
-			3.47367681e-08,
-			-0.893741369
-		)
-
-		local targetCFrame = CFrame.new(
-			-2509.34204,
-			-347.733246,
-			2646.52539,
-			-0.907230675,
-			2.57756465e-08,
-			-0.420633405,
-			1.02833333e-08,
-			1,
-			3.90988717e-08,
-			0.420633405,
-			3.11461825e-08,
-			-0.907230675
-		)
-
-		Rayfield:Notify({
-			Title = "Hyoubu Hub",
-			Content = "Auto Tower iniciado.",
-			Duration = 3,
-			Image = 4483362458,
-		})
-
-		local TowerFolder = ReplicatedStorage.Gamemodes.Tower
-		local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-
-		if not Root then
-			return
-		end
-
-		while TowerEnabled do
-			local Opened = TowerFolder:FindFirstChild("Open")
-			local Wave = TowerFolder:FindFirstChild("Wave")
-
-			if not Opened or not Wave then
-				continue
-			end
-
-			if Opened.Value and not State.Tower then
-				State.Tower = true
-				State.Tower_State = "Teleporting"
-				Gamemode = true
-
-				Root.CFrame = targetLobby
-
-				task.wait(2.5)
-
-				Bridge:FireServer("Gamemodes", "Tower", "Start")
-				Bridge:FireServer("Gamemodes", "Tower", "Join")
-				State.Tower_State = "Joined"
-			end
-
-			if State.Tower then
-				if State.Tower_State == "Joined" then
-					State.Tower_State = "InGame"
-				end
-
-                if State.Tower_State == "InGame" then
-                    Root.CFrame = targetCFrame
-                end
-
-				local maxWave = TowerWave <= 0 and math.huge or TowerWave
-				if Wave.Value >= maxWave then
-					State.Tower_State = "Leaving"
-				end
-
-				if State.Tower_State == "Leaving" then
-					Bridge:FireServer("Gamemodes", "Tower", "Leave")
-
-					State.Tower = false
-					State.Tower_State = nil
-					Gamemode = false
-				end
-			end
-
-			task.wait()
-		end
-	end)
-end
-
-local function StartAutoTP()
-	if Part then
-		Part:Destroy()
+-- Auto AFK
+local AFKConnection
+JobManager:Add("AutoAFK", function()
+	if AFKConnection then
+		AFKConnection:Disconnect()
 	end
-
-	Part = Instance.new("Part")
-	Part.Anchored = true
-	Part.CanCollide = false
-	Part.Transparency = 1
-	Part.Parent = workspace
-	Part.CFrame = Player.Character:WaitForChild("HumanoidRootPart").CFrame
-
-	task.spawn(function()
-		while AutoTpEnabled do
-			if not Gamemode then
-				local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-				if Root and Part then
-					Root.CFrame = Part.CFrame
-				end
-			end
-			task.wait(1.5)
-		end
+	AFKConnection = Player.Idled:Connect(function()
+		VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+		task.wait(1)
+		VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
 	end)
-end
+	Notify("😴 Auto-AFK", "Modo AFK ativado")
+end, function()
+	if AFKConnection then
+		AFKConnection:Disconnect()
+	end
+	Notify("😴 Auto-AFK", "Desativado")
+end)
 
-local function StartAutoMeteor()
-	task.spawn(function()
-		Rayfield:Notify({
-			Title = "🌠 Auto Meteor",
-			Content = "Auto Collect iniciado.",
-			Duration = 3,
-			Image = 4483362458,
-		})
+-- Gamemodes: Trial
+local TrialWave = 0
+JobManager:Add("Trial", function()
+	local LobbyCF = CFrame.new(-2545.5, -262.1, 1653.3)
+	local TrialCF = CFrame.new(-2649.7, -260.9, 1655.4)
+	local Folder = ReplicatedStorage:WaitForChild("Gamemodes"):WaitForChild("Trial")
+	Notify("🚀 Auto Trial", "Iniciado")
 
-		local Collected = {}
+	while JobManager:IsRunning("Trial") do
+		local Opened = Folder:FindFirstChild("Open")
+		local Wave = Folder:FindFirstChild("Wave")
+		if not Opened or not Wave then
+			task.wait(0.6)
+			continue
+		end
 
-		while AutoCollectMeteor do
-			for _, Meteor in pairs(workspace.Server.GameEvent.Meteors.Spawned:GetChildren()) do
-				if Meteor:IsA("Model") and Meteor:FindFirstChild("Mesh") then
-					local Prompt = Meteor.Mesh:FindFirstChildOfClass("ProximityPrompt")
-					if Prompt and not Collected[Meteor] then
-						Prompt.HoldDuration = 0
-						Prompt.RequiresLineOfSight = false
-						Prompt.MaxActivationDistance = 30
+		if Opened.Value and not State.Trial then
+			local cb = function()
+				State.Trial = true
+				Gamemode = true
+				task.wait(2.5)
+				pcall(function()
+					Bridge:FireServer("Gamemodes", "Trial", "Start")
+					Bridge:FireServer("Gamemodes", "Trial", "Join")
+				end)
+			end
+			SafeTeleport(LobbyCF, "Gamemode", cb)
+		elseif State.Trial then
+			SafeTeleport(TrialCF, "Gamemode", nil)
+			local maxWave = TrialWave <= 0 and math.huge or TrialWave
+			if Wave.Value >= maxWave then
+				pcall(function()
+					Bridge:FireServer("Gamemodes", "Trial", "Leave")
+				end)
+				State.Trial = false
+				Gamemode = false
+			end
+		end
+		task.wait(0.5)
+	end
+end, function()
+	State.Trial = false
+	Gamemode = false
+	Notify("🚀 Auto Trial", "Parado")
+end)
 
-						local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-						if Root then
-							local dist = (Root.Position - Meteor.Mesh.Position).Magnitude
-							if dist > 25 then
-								local oldCFrame = Root.CFrame
-								Root.CFrame = Meteor.Mesh.CFrame + vector.create(0, 3, 0)
+-- Gamemodes: Tower
+local TowerWave = 0
+JobManager:Add("Tower", function()
+	local LobbyCF = CFrame.new(-1569.89, 59.03, 1558.01)
+	local TowerCF = CFrame.new(-2508.79, -347.73, 2644.37)
+	local Folder = ReplicatedStorage:WaitForChild("Gamemodes"):WaitForChild("Tower")
+	Notify("🏰 Auto Tower", "Iniciado")
 
-								pcall(function()
-									fireproximityprompt(Prompt, 0)
-								end)
+	while JobManager:IsRunning("Tower") do
+		local Opened = Folder:FindFirstChild("Open")
+		local Wave = Folder:FindFirstChild("Wave")
+		if not Opened or not Wave then
+			task.wait(0.6)
+			continue
+		end
 
-								task.wait()
-								Root.CFrame = oldCFrame
-							else
-								pcall(function()
-									fireproximityprompt(Prompt, 0)
-								end)
-							end
+		if Opened.Value and not State.Tower then
+			local cb = function()
+				State.Tower = true
+				Gamemode = true
+				task.wait(2.5)
+				pcall(function()
+					Bridge:FireServer("Gamemodes", "Tower", "Start")
+					Bridge:FireServer("Gamemodes", "Tower", "Join")
+				end)
+			end
+			SafeTeleport(LobbyCF, "Gamemode", cb)
+		elseif State.Tower then
+			SafeTeleport(TowerCF, "Gamemode", nil)
+			local maxWave = TowerWave <= 0 and math.huge or TowerWave
+			if Wave.Value >= maxWave then
+				pcall(function()
+					Bridge:FireServer("Gamemodes", "Tower", "Leave")
+				end)
+				State.Tower = false
+				Gamemode = false
+			end
+		end
+		task.wait(0.5)
+	end
+end, function()
+	State.Tower = false
+	Gamemode = false
+	Notify("🏰 Auto Tower", "Parado")
+end)
 
-							Collected[Meteor] = true
-						end
+-- Auto Meteor
+JobManager:Add("AutoMeteor", function()
+	local Collected = {}
+	local MeteorsFolder =
+		workspace:WaitForChild("Server"):WaitForChild("GameEvent"):WaitForChild("Meteors"):WaitForChild("Spawned")
+	Notify("🌠 Auto Meteor", "Iniciado")
+
+	while JobManager:IsRunning("AutoMeteor") do
+		for _, Meteor in pairs(MeteorsFolder:GetChildren()) do
+			if Meteor:IsA("Model") and Meteor:FindFirstChild("Mesh") then
+				local Prompt = Meteor.Mesh:FindFirstChildOfClass("ProximityPrompt")
+				if Prompt and not Collected[Meteor] then
+					AllowTeleport = false
+					local targetCf = Meteor.Mesh.CFrame + vector.create(0, 3, 0)
+					local cb = function()
+						task.wait(0.25)
+						pcall(fireproximityprompt, Prompt)
+						task.wait(0.5)
 					end
+					SafeTeleport(targetCf, "Event", cb)
+					Collected[Meteor] = true
 				end
 			end
-
-			task.wait(0.5)
 		end
-	end)
-end
+		task.wait(0.6)
+	end
+end, function()
+	AllowTeleport = true
+	Notify("🌠 Auto Meteor", "Parado")
+end)
 
--- // Keybind Handler
+-- =========================
+-- UI
+-- =========================
+
+-- Gachas Tab
+local GachasTab = Window:CreateTab("Gachas", "sparkles")
+GachasTab:CreateSection("Star Automation")
+GachasTab:CreateToggle({
+	Name = "⭐ Auto Star",
+	CurrentValue = false,
+	Flag = "AutoStar",
+	Callback = function(v)
+		JobManager:Toggle("StarFarm", v)
+	end,
+})
+GachasTab:CreateDropdown({
+	Name = "🌍 Star World",
+	Options = { "Leaf Village", "Dragon Town", "Slayer Village", "Pirate Island" },
+	CurrentOption = {},
+	MultipleOptions = false,
+	Flag = "StarWorldDropdown",
+	Callback = function(Options)
+		Star_World = typeof(Options) == "table" and Options[1] or Options
+	end,
+})
+
+GachasTab:CreateSection("Gacha Automation")
+-- stats
+GachasTab:CreateToggle({
+	Name = "📊 Auto Stats",
+	CurrentValue = false,
+	Flag = "AutoStats",
+	Callback = function(v)
+		-- TODO: implement auto stats allocation
+	end,
+})
+
+GachasTab:CreateDropdown({
+	Name = "Attack",
+	Options = { "D", "C", "B", "A", "S", "Z", "Z+" },
+	CurrentOption = {},
+	MultipleOptions = true,
+	Flag = "Trait_Damage",
+	Callback = function(Value)
+		Stats.Attack = Value
+	end,
+})
+GachasTab:CreateDropdown({
+	Name = "Speed Attack",
+	Options = { "D", "C", "B", "A", "S", "Z", "Z+" },
+	CurrentOption = {},
+	MultipleOptions = true,
+	Flag = "Trait_Damage",
+	Callback = function(Value)
+		Stats.Speed = Value
+	end,
+})
+GachasTab:CreateDropdown({
+	Name = "Ultimate",
+	Options = { "D", "C", "B", "A", "S", "Z", "Z+" },
+	CurrentOption = {},
+	MultipleOptions = true,
+	Flag = "Trait_Damage",
+	Callback = function(Value)
+		Stats.Ultimate = Value
+	end,
+})
+
+-- trait
+GachasTab:CreateToggle({
+	Name = "✨ Auto Trait",
+	CurrentValue = false,
+	Flag = "AutoTrait",
+	Callback = function(v)
+		-- TODO: implement auto trait reroll/select
+	end,
+})
+GachasTab:CreateDropdown({
+	Name = "Trait",
+	Options = {
+		"Fortune",
+		"Vigor",
+		"Swift",
+		"Vigor II",
+		"Swift II",
+		"Fortune II",
+		"Swift III",
+		"Clover I",
+		"Fortune III",
+		"Vigor III",
+		"Clover II",
+		"Scholar",
+		"Strongest",
+		"Clover III",
+		"Monarch",
+	},
+	CurrentOption = {},
+	MultipleOptions = true,
+	Flag = "Trait_Box",
+	Callback = function(Value)
+		Trait = Value
+	end,
+})
+GachasTab:CreateToggle({
+	Name = "🎯 Auto Gacha Spin",
+	CurrentValue = false,
+	Flag = "AutoGachaSpin",
+	Callback = function(v)
+		-- TODO: implement auto gacha spin
+	end,
+})
+
+-- Gamemodes Tab
+local GamemodesTab = Window:CreateTab("Gamemodes", "flag")
+GamemodesTab:CreateSection("Auto Modes")
+GamemodesTab:CreateToggle({
+	Name = "🚀 Auto Trial",
+	CurrentValue = false,
+	Flag = "AutoTrial",
+	Callback = function(v)
+		JobManager:Toggle("Trial", v)
+	end,
+})
+GamemodesTab:CreateInput({
+	Name = "Wave limit (Trial)",
+	PlaceholderText = "0 = infinite",
+	Flag = "TrialLimit",
+	Callback = function(t)
+		TrialWave = tonumber(t) or 0
+	end,
+})
+GamemodesTab:CreateToggle({
+	Name = "🏯 Auto Tower",
+	CurrentValue = false,
+	Flag = "AutoTower",
+	Callback = function(v)
+		JobManager:Toggle("Tower", v)
+	end,
+})
+GamemodesTab:CreateInput({
+	Name = "Wave limit (Tower)",
+	PlaceholderText = "0 = infinite",
+	Flag = "TowerLimit",
+	Callback = function(t)
+		TowerWave = tonumber(t) or 0
+	end,
+})
+
+-- Events Tab
+local EventsTab = Window:CreateTab("Events", "star")
+EventsTab:CreateSection("Events Automation")
+EventsTab:CreateToggle({
+	Name = "🌠 Auto Meteor",
+	CurrentValue = false,
+	Flag = "AutoMeteor",
+	Callback = function(v)
+		JobManager:Toggle("AutoMeteor", v)
+	end,
+})
+
+-- Settings Tab
+local SettingsTab = Window:CreateTab("Settings", "cog")
+SettingsTab:CreateSection("Performance")
+SettingsTab:CreateToggle({
+	Name = "⚙️ Limit FPS",
+	CurrentValue = false,
+	Flag = "LimitFPS",
+	Callback = function(v)
+		JobManager:Toggle("FPSLimit", v)
+	end,
+})
+SettingsTab:CreateSlider({
+	Name = "🎯 Target FPS",
+	Range = { 10, 240 },
+	Increment = 1,
+	CurrentValue = TargetFPS,
+	Flag = "TargetFPS",
+	Callback = function(v)
+		TargetFPS = math.floor(v)
+	end,
+})
+SettingsTab:CreateSection("Utilities")
+SettingsTab:CreateToggle({
+	Name = "😴 Auto-AFK",
+	CurrentValue = false,
+	Flag = "AutoAFK",
+	Callback = function(v)
+		JobManager:Toggle("AutoAFK", v)
+	end,
+})
+SettingsTab:CreateToggle({
+	Name = "🖱️ Auto Click",
+	CurrentValue = false,
+	Flag = "AutoClick",
+	Callback = function(v)
+		JobManager:Toggle("AutoClick", v)
+	end,
+})
+SettingsTab:CreateKeybind({
+	Name = "⌨️ AutoClick Key (single)",
+	CurrentKeybind = "Z",
+	HoldToInteract = false,
+	Flag = "AutoClickKey",
+	Callback = function(t)
+		AutoClickKey = t
+	end,
+})
+
+-- Webhook Tab
+local WebhookTab = Window:CreateTab("Webhook", "rss")
+WebhookTab:CreateSection("Webhook Settings")
+local webhookUrl = ""
+local webhookEnabled = false
+local webhookOnSecret = false
+local webhookOnTrialEnd = false
+
+WebhookTab:CreateInput({
+	Name = "Webhook URL",
+	PlaceholderText = "https://discord.com/api/webhooks/...",
+	Flag = "WebhookURL",
+	Callback = function(t)
+		webhookUrl = t or ""
+	end,
+})
+WebhookTab:CreateToggle({
+	Name = "Enable Webhook",
+	CurrentValue = false,
+	Flag = "WebhookEnable",
+	Callback = function(v)
+		webhookEnabled = v
+	end,
+})
+WebhookTab:CreateToggle({
+	Name = "Notify on Secret Pickup",
+	CurrentValue = false,
+	Flag = "WebhookSecret",
+	Callback = function(v)
+		webhookOnSecret = v
+	end,
+})
+WebhookTab:CreateToggle({
+	Name = "Notify on Trial End",
+	CurrentValue = false,
+	Flag = "WebhookTrial",
+	Callback = function(v)
+		webhookOnTrialEnd = v
+	end,
+})
+WebhookTab:CreateButton({
+	Name = "Send Test Webhook",
+	Callback = function()
+		if not webhookEnabled or webhookUrl == "" then
+			Notify("Webhook", "Webhook não configurado.", 3)
+			return
+		end
+		pcall(function()
+			task.spawn(function()
+				local payload = {
+					username = "Eclipse Hub",
+					content = ("Test webhook from %s"):format(Player.Name),
+				}
+				local ok, err = pcall(function() end)
+			end)
+		end)
+		Notify("Webhook", "Teste enfileirado", 3)
+	end,
+})
+WebhookTab:CreateParagraph({
+	Title = "Uso",
+	Content = "Cole sua webhook URL acima. Quando ativado, o hub pode notificar eventos (ex: secreto pego, trial finalizado).",
+})
+
+-- // HotKeys
 UserInputService.InputBegan:Connect(function(input, gp)
 	if gp then
 		return
 	end
 	if input.KeyCode == AutoClickKey then
-		AutoClickEnabled = not AutoClickEnabled
-		Rayfield:Notify({
-			Title = "🖱️ Auto Click",
-			Content = AutoClickEnabled and "Ativado!" or "Desativado!",
-			Duration = 3,
-			Image = 4483362458,
-		})
-		if AutoClickEnabled then
-			StartAutoClick()
-		end
+		local job = JobManager.ActiveJobs["AutoClick"]
+		JobManager:Toggle("AutoClick", not (job and job.Enabled))
 	end
 end)
 
--- // UI Tabs
-local MainTab = Window:CreateTab("General", 6022668969)
-MainTab:CreateToggle({
-	Name = "⭐ Speed Star",
-	CurrentValue = false,
-	Flag = "AutoStarFarm",
-	Callback = function(Value)
-		StarFarmEnabled = Value
-		if Value then
-			StartStarFarm()
-		end
-	end,
-})
+-- // Webhooks
+local function TrySendWebhookOnSecret(secretName)
+	if not webhookEnabled or webhookUrl == "" or not webhookOnSecret then
+		return
+	end
+	Notify("Webhook", ("(hook) secret: %s"):format(secretName), 3)
+end
 
-MainTab:CreateToggle({
-	Name = "⚠️ Disable UI",
-	CurrentValue = false,
-	Flag = "UI",
-	Callback = function(Value)
-		PlayerGui.Rewards.Frame.List.Frame.Visible = not Value
-	end,
-})
+local function TrySendWebhookOnTrialEnd(info)
+	if not webhookEnabled or webhookUrl == "" or not webhookOnTrialEnd then
+		return
+	end
+	Notify("Webhook", "Trial end (hook enqueued).", 3)
+end
 
-MainTab:CreateInput({
-	Name = "🕐 Atraso do Clique (segundos)",
-	CurrentValue = tostring(ClickDelay),
-	PlaceholderText = "Ex: 0.05 (Rápido)",
-	RemoveTextAfterFocusLost = false,
-	Flag = "AutoClickDelayInput",
-	Callback = function(Text)
-		local num = tonumber(Text)
-		if num and num > 0.001 then
-			ClickDelay = num
-		else
-			Rayfield:Notify({
-				Title = "Hyoubu Hub | Aviso",
-				Content = "Atraso inválido. Usando: " .. tostring(ClickDelay),
-				Duration = 3,
-				Image = 4483362458,
-			})
-		end
-	end,
-})
+Notify("🌙 Eclipse Hub", "Interface carregada com sucesso!", 5)
 
-MainTab:CreateInput({
-	Name = "⌨️ Tecla pra ativar clique",
-	PlaceholderText = "Z",
-	RemoveTextAfterFocusLost = false,
-	Flag = "ClickKeyInput",
-	Callback = function(Text)
-		local key = Enum.KeyCode[string.upper(Text)]
-		if key then
-			AutoClickKey = key
-			Rayfield:Notify({
-				Title = "Hyoubu Hub",
-				Content = "Tecla definida para: " .. Text:upper(),
-				Duration = 3,
-				Image = 4483362458,
-			})
-		else
-			Rayfield:Notify({
-				Title = "Hyoubu Hub | Aviso",
-				Content = "Tecla inválida.",
-				Duration = 3,
-				Image = 4483362458,
-			})
-		end
-	end,
-})
-
-MainTab:CreateToggle({
-	Name = "⚙️ Limite de FPS (Ativar)",
-	CurrentValue = false,
-	Flag = "FPSEnableToggle",
-	Callback = ToggleFPSLimit,
-})
-
-MainTab:CreateSlider({
-	Name = "⚙️ FPS Alvo",
-	Range = { 1, 1000 },
-	Increment = 1,
-	Suffix = " FPS",
-	CurrentValue = TargetFPS,
-	Flag = "FPSSliderValue",
-	Callback = function(Value)
-		TargetFPS = math.floor(Value)
-		if FPSEnabled then
-			FPS()
-		end
-	end,
-})
-
--- // Autos Tab
-local Autos = Window:CreateTab("Autos", 6022668969)
-local Trial
-local Tower
-
-Trial = Autos:CreateToggle({
-	Name = "🚀 Auto Trial",
-	CurrentValue = false,
-	Flag = "AutoTrial",
-	Callback = function(Value)
-		TrialEnabled = Value
-		if Value then
-			Tower:Set(false)
-			StartTrial()
-		end
-	end,
-})
-
-Autos:CreateInput({
-	Name = "🚀 Sair em qual wave",
-	CurrentValue = "0",
-	PlaceholderText = "0 é infinito",
-	Flag = "TrialInput",
-	Callback = function(Text)
-		local num = tonumber(Text)
-		if num then
-			TrialWave = num
-			Rayfield:Notify({
-				Title = "Hyoubu Hub",
-				Content = "Wave limite do Trial: " .. (num == 0 and "infinito" or tostring(num)),
-				Duration = 3,
-				Image = 4483362458,
-			})
-		end
-	end,
-})
-
-Tower = Autos:CreateToggle({
-	Name = "🏰 Auto Tower",
-	CurrentValue = false,
-	Flag = "AutoTower",
-	Callback = function(Value)
-		TowerEnabled = Value
-		if Value then
-			Trial:Set(false)
-			StartTower()
-		end
-	end,
-})
-
-Autos:CreateInput({
-	Name = "🏰 Sair em qual wave",
-	CurrentValue = "0",
-	PlaceholderText = "0 é infinito",
-	Flag = "TowerInput",
-	Callback = function(Text)
-		local num = tonumber(Text)
-		if num then
-			TowerWave = num
-		end
-	end,
-})
-
-Autos:CreateToggle({
-	Name = "🌀 Auto TP",
-	CurrentValue = false,
-	Flag = "Auto_TP",
-	Callback = function(Value)
-		AutoTpEnabled = Value
-		if Value then
-			StartAutoTP()
-		end
-	end,
-})
-
-local Events = Window:CreateTab("Events", 6022668969)
-Events:CreateToggle({
-	Name = "🌠 Auto Collect Meteor",
-	CurrentValue = false,
-	Flag = "Auto_TP",
-	Callback = function(Value)
-		AutoCollectMeteor = Value
-		StartAutoMeteor()
-	end,
-})
-
--- // Configs
-local Config = Window:CreateTab("Settings", 6022668969)
-Config:CreateToggle({
-	Name = "😴 Auto-AFK",
-	CurrentValue = false,
-	Flag = "AFK",
-	Callback = function(Value)
-		AFKEnabled = Value
-		StartAFK()
-		Rayfield:Notify({
-			Title = "Hyoubu Hub",
-			Content = Value and "Modo AFK ativado — você não será kickado!" or "Modo AFK desativado.",
-			Duration = 3,
-			Image = 4483362458,
-		})
-	end,
-})
-
-Rayfield:Notify({
-	Title = "Hyoubu Hub",
-	Content = "Interface carregada com sucesso!",
-	Duration = 5,
-	Image = 4483362458,
-})
+Logger:InitDone()
