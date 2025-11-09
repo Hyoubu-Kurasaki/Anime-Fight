@@ -51,7 +51,6 @@ local Events_Data = ReplicatedStorage:WaitForChild("Game_Events")
 local ClickDelay = 0.05
 local TargetFPS = 30
 local AutoClickKey = Enum.KeyCode.Z
-local ToggleClick = false
 local ClickYOffset = 400
 local Star_World = {}
 local Trait = {}
@@ -406,7 +405,7 @@ end)
 JobManager:Add("StarFarm", function()
 	Notify("⭐ Auto Star", "Auto Star iniciado")
 	while JobManager:IsRunning("StarFarm") do
-		task.wait()
+		task.wait(0.1)
 		local Root: BasePart = Player.Character:FindFirstChild("HumanoidRootPart")
 		if not Root then
 			continue
@@ -454,18 +453,21 @@ end)
 
 -- Utilities
 JobManager:Add("AutoClick", function()
-    Notify("🖱️ Auto Click", "Ativado")
-    while JobManager:IsRunning("AutoClick") do
-        local mousePos = UserInputService:GetMouseLocation()
-        local x, y = mousePos.X, mousePos.Y
+	Notify("🖱️ Auto Click", "Ativado")
 
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+	task.spawn(function()
+		while JobManager:IsRunning("AutoClick") do
+			local mousePos = UserInputService:GetMouseLocation()
+			local x, y = mousePos.X, mousePos.Y
 
-        task.wait(ClickDelay)
-    end
+			VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+			VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+
+			task.wait(ClickDelay)
+		end
+	end)
 end, function()
-    Notify("🖱️ Auto Click", "Desativado")
+	Notify("🖱️ Auto Click", "Desativado")
 end)
 
 -- // Tabs
@@ -493,6 +495,14 @@ GachasTab:CreateDropdown({
 	Flag = "StarWorldDropdown",
 	Callback = function(Options)
 		Star_World = typeof(Options) == "table" and Options[1] or Options
+	end,
+})
+GachasTab:CreateToggle({
+	Name = "⚡ Disable UI",
+	CurrentValue = false,
+	Flag = "Disable_Star",
+	Callback = function(Value)
+		_PlayerGui.Rewards.Frame.List.Frame.Visible = Value
 	end,
 })
 
@@ -655,27 +665,29 @@ SettingsTab:CreateToggle({
 		JobManager:Toggle("AutoAFK", Value)
 	end,
 })
-SettingsTab:CreateToggle({
-	Name = "⌨️ AutoClick ( Keybind: Z )",
-	CurrentValue = false,
-	Flag = "AutoClickFlag",
+SettingsTab:CreateKeybind({
+	Name = "⌨️ AutoClick Key (single)",
+	CurrentKeybind = "Z",
+	HoldToInteract = false,
+	Flag = "AutoClickKey",
 	Callback = function(Value)
-		ToggleClick = Value
+		AutoClickKey = Value
 	end,
 })
 
 -- Connections KeyBinds
 local AutoClick_Enabled = false
+
 UserInputService.InputBegan:Connect(function(input, GPE)
-	if GPE then return end
+	if GPE then
+		return
+	end
 
 	if input.UserInputType == Enum.UserInputType.Keyboard then
 		if input.KeyCode == AutoClickKey then
-			if not ToggleClick then
-				JobManager:Toggle("AutoClick", false)
-			end
 			AutoClick_Enabled = not AutoClick_Enabled
 			JobManager:Toggle("AutoClick", AutoClick_Enabled)
+			print("Toggled AutoClick:", AutoClick_Enabled)
 		end
 	end
 end)
