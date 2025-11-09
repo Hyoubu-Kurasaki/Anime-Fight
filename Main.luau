@@ -502,7 +502,7 @@ GachasTab:CreateToggle({
 	CurrentValue = false,
 	Flag = "Disable_Star",
 	Callback = function(Value)
-		_PlayerGui.Rewards.Frame.List.Frame.Visible = Value
+		_PlayerGui.Rewards.Frame.Visible = Value
 	end,
 })
 
